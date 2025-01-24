@@ -1,0 +1,90 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags like v1.0.0
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64] # Add architectures as needed
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23' # Replace with your desired Go version
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-mod-${{ matrix.os }}-${{ matrix.arch }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-mod-${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Build for ${{ matrix.os }}-${{ matrix.arch }}
+        run: |
+          mkdir -p build/${{ matrix.os }}-${{ matrix.arch }}
+          OUTPUT="build/${{ matrix.os }}-${{ matrix.arch }}/keychain2bitwarden"
+          if [ "${{ matrix.os }}" == "windows" ]; then
+            OUTPUT="${OUTPUT}.exe"
+          fi
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o ${OUTPUT} ./cmd/keychain2bitwarden/main.go
+      
+      - name: Compress artifacts
+        run: |
+          mkdir -p artifacts
+          zip -j artifacts/${{ matrix.os }}-${{ matrix.arch }}.zip build/${{ matrix.os }}-${{ matrix.arch }}/*
+  
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}
+          path: artifacts/${{ matrix.os }}-${{ matrix.arch }}.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List downloaded artifacts
+        run: ls -R ./artifacts
+
+      - name: Create a Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+      - name: Upload binaries to Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ./artifacts/**/*.zip
+        
